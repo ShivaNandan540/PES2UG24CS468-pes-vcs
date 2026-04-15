@@ -1,61 +1,93 @@
 #include "pes.h"
-#include <stdlib.h>
+#include "index.h"
+#include "commit.h"
+
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 
-// ─── PROVIDED: Phase 5 Command Wrappers ─────────────────────────────────────
+// ---------------- INIT ----------------
+void cmd_init() {
+    mkdir(".pes", 0777);
+    mkdir(".pes/objects", 0777);
+    mkdir(".pes/refs", 0777);
+    mkdir(".pes/refs/heads", 0777);
 
-// Usage: 
-//   pes branch          (lists branches)
-//   pes branch <name>   (creates a branch)
-//   pes branch -d <name>(deletes a branch)
-void cmd_branch(int argc, char *argv[]) {
-    if (argc == 2) {
-        branch_list();
-    } else if (argc == 3) {
-        if (branch_create(argv[2]) == 0) {
-            printf("Created branch '%s'\n", argv[2]);
-        } else {
-            fprintf(stderr, "error: failed to create branch '%s'\n", argv[2]);
-        }
-    } else if (argc == 4 && strcmp(argv[2], "-d") == 0) {
-        if (branch_delete(argv[3]) == 0) {
-            printf("Deleted branch '%s'\n", argv[3]);
-        } else {
-            fprintf(stderr, "error: failed to delete branch '%s'\n", argv[3]);
-        }
-    } else {
-        fprintf(stderr, "Usage:\n  pes branch\n  pes branch <name>\n  pes branch -d <name>\n");
+    FILE *f = fopen(".pes/HEAD", "w");
+    if (f) {
+        fprintf(f, "ref: refs/heads/main\n");
+        fclose(f);
     }
+
+    f = fopen(".pes/refs/heads/main", "w");
+    if (f) fclose(f);
+
+    printf("Initialized empty PES repository\n");
 }
 
-// Usage: pes checkout <branch_or_commit>
-void cmd_checkout(int argc, char *argv[]) {
+// ---------------- ADD ----------------
+void cmd_add(int argc, char *argv[]) {
     if (argc < 3) {
-        fprintf(stderr, "Usage: pes checkout <branch_or_commit>\n");
+        printf("Usage: pes add <file>...\n");
         return;
     }
 
-    const char *target = argv[2];
-    if (checkout(target) == 0) {
-        printf("Switched to '%s'\n", target);
-    } else {
-        fprintf(stderr, "error: checkout failed. Do you have uncommitted changes?\n");
+    Index idx;
+    index_load(&idx);
+
+    for (int i = 2; i < argc; i++) {
+        index_add(&idx, argv[i]);
     }
+
+    index_save(&idx);
 }
 
-// ─── PROVIDED: Command dispatch ─────────────────────────────────────────────
+// ---------------- STATUS ----------------
+void cmd_status() {
+    Index idx;
+    index_load(&idx);
+    index_status(&idx);
+}
 
+// ---------------- COMMIT ----------------
+int cmd_commit(int argc, char *argv[]) {
+    if (argc < 4 || strcmp(argv[2], "-m") != 0) {
+        printf("error: commit requires -m \"message\"\n");
+        return -1;
+    }
+
+    const char *message = argv[3];
+
+    ObjectID id;
+    if (commit_create(message, &id) != 0) return -1;
+
+    char hex[65];
+    hash_to_hex(&id, hex);
+
+    printf("Committed: %.12s... %s\n", hex, message);
+    return 0;
+}
+
+// ---------------- LOG ----------------
+void cmd_log() {
+    printf("Log not implemented yet\n");
+}
+
+// ---------------- BRANCH (stub) ----------------
+void cmd_branch(int argc, char *argv[]) {
+    printf("Branch feature not implemented\n");
+}
+
+// ---------------- CHECKOUT (stub) ----------------
+void cmd_checkout(int argc, char *argv[]) {
+    printf("Checkout feature not implemented\n");
+}
+
+// ---------------- MAIN ----------------
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: pes <command> [args]\n");
-        fprintf(stderr, "\nCommands:\n");
-        fprintf(stderr, "  init            Create a new PES repository\n");
-        fprintf(stderr, "  add <file>...   Stage files for commit\n");
-        fprintf(stderr, "  status          Show working directory status\n");
-        fprintf(stderr, "  commit -m <msg> Create a commit from staged files\n");
-        fprintf(stderr, "  log             Show commit history\n");
-        fprintf(stderr, "  branch          List, create, or delete branches\n");
-        fprintf(stderr, "  checkout <ref>  Switch branches or restore working tree\n");
+        printf("Usage: pes <command>\n");
         return 1;
     }
 
@@ -69,8 +101,7 @@ int main(int argc, char *argv[]) {
     else if (strcmp(cmd, "branch") == 0)   cmd_branch(argc, argv);
     else if (strcmp(cmd, "checkout") == 0) cmd_checkout(argc, argv);
     else {
-        fprintf(stderr, "Unknown command: %s\n", cmd);
-        fprintf(stderr, "Run 'pes' with no arguments for usage.\n");
+        printf("Unknown command\n");
         return 1;
     }
 

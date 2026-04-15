@@ -127,56 +127,75 @@ int commit_walk(commit_walk_fn callback, void *ctx) {
 
 // Read the current HEAD commit hash.
 int head_read(ObjectID *id_out) {
-    FILE *f = fopen(HEAD_FILE, "r");
+    FILE *f = fopen(".pes/HEAD", "r");
     if (!f) return -1;
-    char line[512];
-    if (!fgets(line, sizeof(line), f)) { fclose(f); return -1; }
-    fclose(f);
-    line[strcspn(line, "\r\n")] = '\0'; // strip newline
 
-    char ref_path[512];
-    if (strncmp(line, "ref: ", 5) == 0) {
-        snprintf(ref_path, sizeof(ref_path), "%s/%s", PES_DIR, line + 5);
-        f = fopen(ref_path, "r");
-        if (!f) return -1; // Branch exists but has no commits yet
-        if (!fgets(line, sizeof(line), f)) { fclose(f); return -1; }
+    char ref[256];
+    if (!fgets(ref, sizeof(ref), f)) {
         fclose(f);
-        line[strcspn(line, "\r\n")] = '\0';
+        return -1;
     }
-    return hex_to_hash(line, id_out);
+    fclose(f);
+
+    ref[strcspn(ref, "\n")] = 0;
+
+    if (strncmp(ref, "ref: ", 5) == 0) {
+        char path[512];
+        snprintf(path, sizeof(path), ".pes/%s", ref + 5);
+
+        f = fopen(path, "r");
+        if (!f) return -1;
+
+        char hash[65];
+        if (!fgets(hash, sizeof(hash), f)) {
+            fclose(f);
+            return -1;
+        }
+        fclose(f);
+
+        hash[strcspn(hash, "\n")] = 0;
+
+        hex_to_hash(hash, id_out);
+        return 0;
+    }
+
+    return -1;
 }
 
 // Update the current branch ref to point to a new commit atomically.
-int head_update(const ObjectID *new_commit) {
-    FILE *f = fopen(HEAD_FILE, "r");
+int head_update(const ObjectID *id) {
+    // Step 1: read HEAD
+    FILE *f = fopen(".pes/HEAD", "r");
     if (!f) return -1;
-    char line[512];
-    if (!fgets(line, sizeof(line), f)) { fclose(f); return -1; }
-    fclose(f);
-    line[strcspn(line, "\r\n")] = '\0';
 
-    char target_path[512];
-    if (strncmp(line, "ref: ", 5) == 0) {
-        snprintf(target_path, sizeof(target_path), "%s/%s", PES_DIR, line + 5);
-    } else {
-        snprintf(target_path, sizeof(target_path), "%s", HEAD_FILE); // Detached HEAD
+    char ref[256];
+    if (!fgets(ref, sizeof(ref), f)) {
+        fclose(f);
+        return -1;
     }
-
-    char tmp_path[512];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", target_path);
-    
-    f = fopen(tmp_path, "w");
-    if (!f) return -1;
-    
-    char hex[HASH_HEX_SIZE + 1];
-    hash_to_hex(new_commit, hex);
-    fprintf(f, "%s\n", hex);
-    
-    fflush(f);
-    fsync(fileno(f));
     fclose(f);
-    
-    return rename(tmp_path, target_path);
+
+    // remove newline
+    ref[strcspn(ref, "\n")] = 0;
+
+    // Step 2: get branch path
+    if (strncmp(ref, "ref: ", 5) != 0) return -1;
+
+    char path[512];
+    snprintf(path, sizeof(path), ".pes/%s", ref + 5);
+
+    // Step 3: convert hash to hex
+    char hex[65];
+    hash_to_hex(id, hex);
+
+    // Step 4: write to branch file
+    f = fopen(path, "w");
+    if (!f) return -1;
+
+    fprintf(f, "%s\n", hex);
+    fclose(f);
+
+    return 0;
 }
 
 // ─── TODO: Implement these ───────────────────────────────────────────────────
@@ -193,9 +212,33 @@ int head_update(const ObjectID *new_commit) {
 //   - head_update       : moves the branch pointer to your new commit
 //
 // Returns 0 on success, -1 on error.
-int commit_create(const char *message, ObjectID *commit_id_out) {
-    // TODO: Implement commit creation
-    // (See Lab Appendix for logical steps)
-    (void)message; (void)commit_id_out;
-    return -1;
+int commit_create(const char *message, ObjectID *id_out) {
+    // Step 1: create tree
+    ObjectID tree_id;
+    if (tree_from_index(&tree_id) != 0) return -1;
+
+    // Step 2: build commit content
+    char buffer[4096];
+    char tree_hex[65];
+    hash_to_hex(&tree_id, tree_hex);
+
+    const char *author = pes_author();
+    long timestamp = time(NULL);
+
+    int len = 0;
+
+    len += sprintf(buffer + len, "tree %s\n", tree_hex);
+    len += sprintf(buffer + len, "author %s %ld\n", author, timestamp);
+    len += sprintf(buffer + len, "committer %s %ld\n\n", author, timestamp);
+    len += sprintf(buffer + len, "%s\n", message);
+
+    // Step 3: store commit
+    if (object_write(OBJ_COMMIT, buffer, len, id_out) != 0)
+        return -1;
+
+    // Step 4: update HEAD
+    if (head_update(id_out) != 0)
+        return -1;
+
+    return 0;
 }

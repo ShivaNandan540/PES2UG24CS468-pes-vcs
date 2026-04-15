@@ -88,13 +88,63 @@ int object_exists(const ObjectID *id) {
 //   - fsync              : flushing the file descriptor to disk
 //   - rename             : atomically moving the temp file to the final path
 //
-
 //
 // Returns 0 on success, -1 on error.
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // TODO: Implement
-    (void)type; (void)data; (void)len; (void)id_out;
-    return -1;
+    // Step 1: convert type to string
+    const char *type_str;
+    if (type == OBJ_BLOB) type_str = "blob";
+    else if (type == OBJ_TREE) type_str = "tree";
+    else type_str = "commit";
+
+    // Step 2: create header
+    char header[64];
+    int header_len = sprintf(header, "%s %zu", type_str, len) + 1;
+
+    // Step 3: combine header + data
+    size_t total_len = header_len + len;
+    unsigned char *buffer = malloc(total_len);
+    if (!buffer) return -1;
+
+    memcpy(buffer, header, header_len);
+    memcpy(buffer + header_len, data, len);
+
+    // Step 4: compute hash
+    compute_hash(buffer, total_len, id_out);
+
+    // Step 5: convert hash to hex
+    char hex[65];
+    hash_to_hex(id_out, hex);
+
+    // Step 6: create directory + path
+    char dir[3];
+    strncpy(dir, hex, 2);
+    dir[2] = '\0';
+
+    char dir_path[512];
+    snprintf(dir_path, sizeof(dir_path), ".pes/objects/%s", dir);
+
+    char path[512];
+    snprintf(path, sizeof(path), ".pes/objects/%s/%s", dir, hex + 2);
+
+    // Step 7: create directories
+    mkdir(".pes", 0755);
+    mkdir(".pes/objects", 0755);
+    mkdir(dir_path, 0755);
+
+    // Step 8: write file
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        free(buffer);
+        return -1;
+    }
+
+    fwrite(buffer, 1, total_len, f);
+    fclose(f);
+
+    free(buffer);
+
+    return 0;
 }
 
 // Read an object from the store.
@@ -112,8 +162,7 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 //   - object_path        : getting the target file path
 //   - fopen, fread, fseek: reading the file into memory
 //   - memchr             : safely finding the '\0' separating header and data
-//   - strncmp            : parsing the type string ("blob", "tree", "commit")
-//   - compute_hash       : re-hashing the read data for integrity verification
+//   - strncmp            : parsing the type string ("blob", "tree", "- compute_hash       : re-hashing the read data for integrity verification
 //   - memcmp             : comparing the computed hash against the requested hash
 //   - malloc, memcpy     : allocating and returning the extracted data
 //
@@ -122,7 +171,77 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 // The caller is responsible for calling free(*data_out).
 // Returns 0 on success, -1 on error (file not found, corrupt, etc.).
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-    // TODO: Implement
-    (void)id; (void)type_out; (void)data_out; (void)len_out;
-    return -1;
+    // Step 1: convert hash to hex
+    char hex[65];
+    hash_to_hex(id, hex);
+
+    // Step 2: construct path
+    char path[512];
+    snprintf(path, sizeof(path), ".pes/objects/%c%c/%s", hex[0], hex[1], hex + 2);
+
+    // Step 3: open file
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+
+    // Step 4: read file
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    rewind(f);
+
+    unsigned char *buffer = malloc(size);
+    if (!buffer) {
+        fclose(f);
+        return -1;
+    }
+
+    fread(buffer, 1, size, f);
+    fclose(f);
+
+    // ✅ Step 5: VERIFY INTEGRITY (IMPORTANT FIX)
+    ObjectID check_id;
+    compute_hash(buffer, size, &check_id);
+
+    if (memcmp(check_id.hash, id->hash, 32) != 0) {
+        free(buffer);
+        return -1;
+    }
+
+    // Step 6: parse header
+    char *space = strchr((char *)buffer, ' ');
+    char *null_byte = strchr((char *)buffer, '\0');
+
+    if (!space || !null_byte) {
+        free(buffer);
+        return -1;
+    }
+
+    *space = '\0';
+    char *type_str = (char *)buffer;
+
+    size_t data_len = strtoul(space + 1, NULL, 10);
+
+    if (data_len > (size_t)(size - (null_byte - (char *)buffer) - 1)) {
+        free(buffer);
+        return -1;
+    }
+
+    // Step 7: determine type
+    if (strcmp(type_str, "blob") == 0) *type_out = OBJ_BLOB;
+    else if (strcmp(type_str, "tree") == 0) *type_out = OBJ_TREE;
+    else *type_out = OBJ_COMMIT;
+
+    // Step 8: extract data
+    unsigned char *data_start = (unsigned char *)(null_byte + 1);
+
+    *data_out = malloc(data_len);
+    if (!*data_out) {
+        free(buffer);
+        return -1;
+    }
+
+    memcpy(*data_out, data_start, data_len);
+    *len_out = data_len;
+
+    free(buffer);
+    return 0;
 }

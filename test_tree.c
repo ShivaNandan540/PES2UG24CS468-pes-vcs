@@ -105,5 +105,31 @@ int main(void) {
     test_tree_determinism();
 
     printf("\nAll Phase 2 tests passed.\n");
+Tree tree;
+tree.count = 1;
+
+tree.entries[0].mode = 100644;
+strcpy(tree.entries[0].name, "file1.txt");
+
+// fake hash (32 bytes)
+memset(tree.entries[0].hash, 1, 32);
+
+ObjectID id;
+tree_serialize(&tree, &id);
+
+printf("Tree hash generated\n");
+Tree tree;
+tree.count = 1;
+
+tree.entries[0].mode = 100644;
+strcpy(tree.entries[0].name, "file1.txt");
+
+// fake hash (32 bytes)
+memset(tree.entries[0].hash, 1, 32);
+
+ObjectID id;
+tree_serialize(&tree, &id);
+
+printf("Tree hash generated\n");
     return 0;
 }
